@@ -1,0 +1,122 @@
+
+/*
+Code based on tutorial by Fabricio Troya - Last revision 14/06/2022
+@ https://docs.arduino.cc/tutorials/nano-33-iot/ifttt-connection/
+*/
+
+#include <WiFiNINA.h>
+#include "secret.h"
+#include <Wire.h>
+#include <BH1750.h>
+
+// Please enter your sensitive data in the Secret tab
+char ssid[] = SECRET_SSID; // Wi-Fi network SSID
+char pass[] = SECRET_PASS; // Wi-Fi network password
+
+WiFiClient client; // Wi-Fi client for communication
+
+char HOST_NAME[] = "maker.ifttt.com"; // IFTTT webhook server hostname
+String PATH_NAME = "/trigger/Light/with/key/" + String(SECRET_KEY); // IFTTT webhook path with secret key
+
+BH1750 lightMeter; // BH1750 light sensor instance
+
+bool inSunlight = false; // Flag to track if terrarium is in sunlight
+unsigned long sunlightStart; // Time when terrarium entered sunlight
+bool dayDone = false; // Track if day's light level has been reached
+
+void setup() {
+  // Initialize WiFi connection
+  WiFi.begin(ssid, pass);
+
+  Serial.begin(9600); // Initialise serial communication
+  while (!Serial); // Wait for Serial monitor to open
+
+  // Initialise the I2C bus and BH1750 sensor
+  Wire.begin();
+  lightMeter.begin();
+
+  Serial.println(F("BH1750 Test begin")); // Print message to Serial monitor
+}
+
+// Function to read light level and return it
+float readLightLevel() {
+  // Read light level from BH1750 sensor
+  float lux = lightMeter.readLightLevel();
+
+  // Output light level to the terminal
+  Serial.print("Light: ");
+  Serial.print(lux);
+  Serial.println(" lx");
+
+  // Return the light level
+  return lux;
+}
+
+// Function to send webhook request
+void sendWebhook(String message) {
+  // Connect to the web server on port 80
+  if (client.connect(HOST_NAME, 80)) {
+    // If connected
+    Serial.println("Connected to server");
+
+    // Make an HTTP request
+    client.print("GET " + PATH_NAME + "?value1=" + message + " HTTP/1.1\r\n");
+    client.print("Host: " + String(HOST_NAME) + "\r\n");
+    client.print("Connection: close\r\n"); // Close the connection after sending
+    client.println(); // End HTTP header
+
+    delay(1000); // Wait for server response
+
+    // Check for response from server
+    while (client.connected()) {
+      if (client.available()) {
+        // Read and print response from server
+        char c = client.read();
+        Serial.print(c);
+      }
+    }
+
+    // Disconnect from server
+    client.stop();
+    Serial.println();
+    Serial.println("Disconnected from server");
+  } else {
+    // If connection failed
+    Serial.println("Connection to server failed");
+  }
+}
+
+void loop() {
+  // Call the function to read the light level
+  float lux = readLightLevel();
+  
+  // Resets the sensor based on assumption terrarium is covered for remainder of day - then uncovered ready for next day.
+  if (lux <= 2 && dayDone) {
+    dayDone = false;
+  }
+
+  // Check if light level is above 5 lux
+  if (lux > 5 && !inSunlight && !dayDone) {
+    // Terrarium entered sunlight
+    inSunlight = true;
+    sunlightStart = millis(); // Record current time
+    sendWebhook("Terrarium in sunlight, 3 minutes remaining"); // Notification for sunlight start - 3min used for demo - real time requires 2hrs
+  }
+
+  // Check if terrarium is in sunlight
+  if (inSunlight) {
+    // Calculate elapsed time since terrarium entered sunlight
+    unsigned long currentTime = millis();
+    unsigned long elapsedTime = currentTime - sunlightStart;
+
+    // Check if 10 minutes have passed
+    if (elapsedTime >= 3 * 60 * 1000) { // 3 minutes in milliseconds - 3min used for demo - real time requires 2hrs
+      // 3 minutes reached, cover terrarium - 3min used for demo - real time requires 2hrs
+      sendWebhook("3 minutes reached, cover terrarium"); // Notification for sunlight finished - 3min used for demo - real time requires 2hrs
+      inSunlight = false; // Reset sunlight flag
+      dayDone = true;
+    }
+  }
+  delay(60000); // 1 minute in milliseconds
+
+}
